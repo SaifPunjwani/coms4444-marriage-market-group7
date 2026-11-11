@@ -78,6 +78,9 @@ COOLDOWN = 10
 STALL = 5
 # In the last few rounds, propose to anyone compatible.
 ENDGAME = 6
+# The share of the market that must still be single for us to keep holding
+# out for the shared matching rather than take early offers.
+WAITING = 0.5
 # Spare rounds, beyond one per person, for meeting everyone in a small market
 # before everybody commits on the same round.
 SLACK = 4
@@ -145,6 +148,10 @@ class Player7(BasePlayer):
 		meet_all = self.people - 1 + SLACK
 		self.commit_after = meet_all if meet_all + ENDGAME < self.rounds else None
 		self.exploring = True
+		# Whether most of the market has already married: then few people are
+		# left to plan with, and waiting for the shared matching costs more
+		# than it gains.
+		self.hasty = False
 		self.target: int | None = None
 		self.waited = 0
 		self.round = 0
@@ -389,6 +396,7 @@ class Player7(BasePlayer):
 			self.last_seen[c.index] = turn.round
 		fresh = [c for c in candidates if c.index not in self.shown]
 		self.unmet = len(fresh)
+		self.hasty = turn.singles < WAITING * self.people
 		limit = self.list_limit if self.list_limit is not None else len(candidates)
 
 		late = turn.rounds_left <= ENDGAME
@@ -481,24 +489,29 @@ class Player7(BasePlayer):
 				return Decision(incompatible=True)
 			return Decision()
 
+		ally = self._ally(who)
+		# Whether they will hold off until everyone has met everyone, as the
+		# shared matching needs. A signed copy always does. With recognition
+		# off we cannot know who does, so we assume it of every honest person
+		# until most of the market has married without waiting.
+		waits = ally and (self.recognise or not self.hasty)
+		willing = their > 0 or who in self.proposed_to_me or not ally
+		bar = self._bar(date.rounds_left)
 		if who == self.target:
 			self.waited = 0
-			# A copy of us waits until both have met everyone, so the matching
-			# is built from the whole market rather than the first few dates.
-			if self.exploring and self._ally(who):
+			if self.exploring and (waits or ours < bar):
 				return Decision()
 			return Decision(again=True, propose=date.date_number >= 2)
 
 		# Someone who already proposed, anyone compatible once the matching has
 		# nobody for us, or anyone compatible near the end.
-		ally = self._ally(who)
-		willing = their > 0 or who in self.proposed_to_me or not ally
 		late = date.rounds_left <= ENDGAME or self.target is None and not self.exploring
-		bar = self._bar(date.rounds_left)
-		# Someone outside our matching will not wait for us: take them if they
-		# beat both the partner the matching offers and what the rest of the
-		# market is likely to offer.
-		if not ally:
+		# Someone who will not wait for the matching: take them if they beat
+		# both the partner it offers us and what the rest of the market is
+		# likely to offer. Not while we are still meeting everyone, though,
+		# unless the market is emptying around us: every early marriage takes
+		# a partner away from somebody the matching could have placed.
+		if not waits and willing and (self.hasty or not self.exploring):
 			mine = self._with_me(self.target)[0] if self.target in self.shown else 0
 			if ours >= max(mine, bar):
 				return Decision(again=True, propose=date.date_number >= 2)
