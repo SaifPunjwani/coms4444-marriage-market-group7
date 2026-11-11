@@ -27,15 +27,19 @@ stages, all timed by public numbers so that everyone switches together:
 1. Meet: for N-1 rounds plus a few spare, date each person once, in a
    round-robin order anyone can compute from N and their own index. Nobody is
    taken early, because each early marriage removes a partner the matching
-   could have placed. The exception is a market that is emptying anyway: once
-   more than half of it has married, we take whoever beats a patience bar.
+   could have placed.
 2. Commit: list only our assigned partner and propose.
 3. Fall back: if they do not respond, or time is running out, propose to any
    compatible person.
 
-A market too big to meet everyone has no such clock. There we hold out for a
-patience bar: what we expect to end up with from the people we can still
-meet. It is reasoned dimension by dimension. Under the values we have seen,
+Waiting only pays when enough of the market waits with us. Once more than half
+of it has married (or, with recognition on, once few of the people we have met
+turn out to be copies) we drop the schedule and play the market like anyone
+else: go back to the best people we know and take whoever beats a patience bar.
+
+A market too big to meet everyone has no such clock. There we hold out for
+the patience bar from the start: what we expect to end up with from the
+people we can still meet. It is reasoned dimension by dimension. Under the values we have seen,
 each dimension has an expected cost and a variance, and since dimensions are
 drawn independently these add up to the mean and spread of our happiness with
 a random partner. The number of people we can still meet is limited by how
@@ -96,6 +100,10 @@ ENDGAME = 6
 # The share of the people we set out to meet that must still be single for us
 # to keep holding out for the shared matching rather than take early offers.
 WAITING = 0.5
+# With recognition on we can also count: once we have met SAMPLE people, if
+# fewer than FEW of them are copies there are too few of us to plan with.
+SAMPLE = 6
+FEW = 0.25
 # How many rounds we assume a single person stays available in a large market
 # before anyone has had time to marry and show us how fast it really empties.
 BRISK = 8
@@ -513,8 +521,8 @@ class Player7(BasePlayer):
 		if spread <= 0:
 			return bar
 		chances = min(self.unmet, max(0, rounds_left - ENDGAME))
-		if self.commit_after is None:
-			chances = min(chances, int(self.outlook))
+		if self.outlook < chances:
+			chances = int(self.outlook)
 		for _ in range(chances):
 			z = (mean - bar) / spread
 			gain = spread * (NORMAL.pdf(z) + z * NORMAL.cdf(z))
@@ -526,10 +534,12 @@ class Player7(BasePlayer):
 	def _life(self) -> float:
 		"""How many more rounds a single person can be expected to stay single,
 		judged by how fast the market has been emptying lately. Nobody can
-		marry before the second date, so the first rounds go by a guess."""
+		marry before the second date, so in a large market the first rounds go
+		by a guess; in a small one we assume people stay until shown
+		otherwise."""
 		seen = self.census
 		if len(seen) < 3:
-			return BRISK
+			return BRISK if self.commit_after is None else math.inf
 		span = min(3, len(seen) - 2)
 		kept = (seen[-1] / seen[-1 - span]) ** (1 / span)
 		return kept / (1 - kept) if kept < 1 else math.inf
@@ -573,14 +583,17 @@ class Player7(BasePlayer):
 		target = self.target if self.target in offered else None
 		# While there are more people than we can ever meet, we hold out for
 		# what the rest of the market is likely to offer.
+		# The same goes for a small market that is emptying while we are still
+		# meeting it: we drop the schedule and play it like any other market.
 		least = 0.0
-		if self.roomy:
+		crowd = self.hasty and exploring and self.commit_after is not None
+		if self.roomy or crowd:
 			least = self._bar(turn.rounds_left)
 			if target is not None and self._with_me(target)[0] < least:
 				target, self.waited = None, 0
 		if target is not None and not exploring:
 			return [target]
-		if exploring and self.commit_after is not None:
+		if exploring and self.commit_after is not None and not crowd:
 			# Meet everyone once. The engine pairs us with anyone on our list
 			# who also listed us, in no particular order, so the only way to
 			# keep to the shared schedule is to name nobody else.
@@ -596,7 +609,7 @@ class Player7(BasePlayer):
 			return chosen[:limit]
 		chosen = [target] if target is not None else []
 		later = []
-		if late or not exploring:
+		if late or not exploring or crowd:
 			for w in self._best_compatible(least):
 				if w in offered and w not in chosen:
 					# Someone who keeps turning us down goes behind new faces.
@@ -615,8 +628,7 @@ class Player7(BasePlayer):
 		fresh = [c for c in candidates if c.index not in self.shown]
 		self.unmet = len(fresh)
 		self.census.append(turn.singles)
-		if self.commit_after is None:
-			self.outlook = min(self.outlook, self._life())
+		self.outlook = min(self.outlook, self._life())
 
 		late = turn.rounds_left <= ENDGAME
 		self.roomy = (
@@ -631,6 +643,9 @@ class Player7(BasePlayer):
 		# Nobody waits in a market too big to plan for. Otherwise people are
 		# waiting as long as at least half of them are still here.
 		self.hasty = self.pool is None or turn.singles < WAITING * self.pool
+		if self.recognise and not self.hasty and len(self.shown) >= SAMPLE:
+			copies = sum(1 for who in self.shown if self._ally(who))
+			self.hasty = copies < FEW * len(self.shown)
 
 		if self.commit_after is not None:
 			self.exploring = turn.round <= self.commit_after
