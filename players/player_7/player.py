@@ -13,12 +13,14 @@ partner, so copies agree on who marries whom without sharing any state. The
 matching repeatedly pairs the person with the fewest compatible partners, so
 people with many options do not take the only option of someone with few.
 
-Copies recognise each other honestly: our ad's dimensions are a checksum of
-our true profile and ideal, which a date reveals. Only recognised copies go
-into the shared matching. Anyone else will not wait for a matching they do not
-compute, so we take them once they beat both our assigned partner and a
-patience bar: what we expect to end up with if we hold out for the people we
-can still meet. The bar is reasoned dimension by dimension. Under the values
+Who joins the shared matching depends on RECOGNISE. Turned off, everyone who
+has been honest with us joins it, our ad is an ordinary one, and nothing in
+this file tells a copy of this player from any other honest person. Turned on,
+our ad's dimensions are a checksum of our true profile and ideal, which a date
+reveals, and only people whose ad carries that signature join. Anyone left out
+will not wait for a matching they do not compute, so we take them once they
+beat both our assigned partner and a patience bar: what we expect to end up
+with if we hold out for the people we can still meet. The bar is reasoned dimension by dimension. Under the values
 we have seen, each dimension has an expected cost and a variance, and since
 dimensions are drawn independently these add up to the mean and spread of our
 happiness with a random partner. The bar falls to zero as the unmet people
@@ -58,6 +60,11 @@ from models.profile import Profile, decrement
 VALUES = range(11)
 NORMAL = NormalDist()
 
+# Whether to single out copies of this player. Off: the shared matching is open
+# to every honest person and nothing here identifies a copy. On: our ad is a
+# signature, and only people who carry it join the matching.
+RECOGNISE = False
+
 # Pseudo-counts per value before any date: a broad bell around 5, so the first
 # ad-based estimates are sensible and real observations soon dominate.
 PRIOR = [0.5 + 1.5 * math.exp(-((v - 5) ** 2) / 12.5) for v in VALUES]
@@ -85,8 +92,17 @@ MIRROR = 1
 NUDGE = 2
 
 
-def _ad(profile: Profile, ideal: Profile) -> Advertisement:
-	"""Our honest ad, with both dimensions picked by a checksum of our profile
+def _plain_ad(profile: Profile, ideal: Profile, monotonic: int) -> Advertisement:
+	"""An ordinary honest ad: the monotonic trait we score best on, and the
+	dimension where our ideal is furthest from the middle of the scale."""
+	showable = range(monotonic) if monotonic else range(len(profile))
+	own = max(showable, key=lambda dim: profile[dim])
+	seek = max(range(len(ideal)), key=lambda dim: abs(ideal[dim] - 5))
+	return Advertisement(own_dim=own, own_value=profile[own], seek_dim=seek, seek_value=ideal[seek])
+
+
+def _signed_ad(profile: Profile, ideal: Profile) -> Advertisement:
+	"""An honest ad with both dimensions picked by a checksum of our profile
 	and ideal. A date shows us a partner's true profile and ideal, and if they
 	produce exactly the ad that partner showed, the partner runs this player.
 	Other groups pick dimensions by value, so they rarely match by chance."""
@@ -100,6 +116,8 @@ def _ad(profile: Profile, ideal: Profile) -> Advertisement:
 
 class Player7(BasePlayer):
 	"""One honest person who marries the partner a shared matching assigns."""
+
+	recognise = RECOGNISE
 
 	def __init__(self, snapshot: PlayerSnapshot, ctx: GameContext) -> None:
 		super().__init__(snapshot, ctx)
@@ -232,18 +250,21 @@ class Player7(BasePlayer):
 	# Matching
 	# ------------------------------------------------------------------
 
-	def _kin(self, who: int) -> bool:
-		"""Whether ``who`` runs this player: honest, and their ad is exactly the
-		one we would write for the profile and ideal they showed us."""
-		return self._trusted(who) and self.ads.get(who) == _ad(
-			self.shown[who][0], self.stated[who][0]
-		)
+	def _ally(self, who: int) -> bool:
+		"""Whether ``who`` joins the shared matching: they have been honest with
+		us and, when we single out copies, their ad is exactly the signed one
+		we would write for the profile and ideal they showed us."""
+		if not self._trusted(who):
+			return False
+		if not self.recognise:
+			return True
+		return self.ads.get(who) == _signed_ad(self.shown[who][0], self.stated[who][0])
 
 	def _singles(self) -> list[int]:
 		return [
 			who
 			for who in self.shown
-			if self.round - self.last_seen.get(who, -GONE_AFTER) < GONE_AFTER and self._kin(who)
+			if self.round - self.last_seen.get(who, -GONE_AFTER) < GONE_AFTER and self._ally(who)
 		]
 
 	def _assign(self) -> int | None:
@@ -326,7 +347,7 @@ class Player7(BasePlayer):
 		return bar
 
 	def _snubbed(self, who: int) -> bool:
-		if who in self.proposed_to_me or self._kin(who):
+		if who in self.proposed_to_me or self._ally(who):
 			return False
 		return self.snubs.get(who, 0) >= SNUBS
 
@@ -339,7 +360,7 @@ class Player7(BasePlayer):
 				continue
 			ours, their = self._with_me(who)
 			likely = their > 0 or who in self.proposed_to_me
-			if ours > 0 and (likely or not self._kin(who)):
+			if ours > 0 and (likely or not self._ally(who)):
 				scored.append((not self._snubbed(who), likely, ours, who))
 		return [who for *_, who in sorted(scored, reverse=True)]
 
@@ -348,7 +369,9 @@ class Player7(BasePlayer):
 	# ------------------------------------------------------------------
 
 	def advertise(self) -> Advertisement:
-		return _ad(self.profile, self.ideal)
+		if self.recognise:
+			return _signed_ad(self.profile, self.ideal)
+		return _plain_ad(self.profile, self.ideal, self.monotonic)
 
 	def choose_dates(self, candidates: tuple[Candidate, ...], turn: RoundContext) -> list[int]:
 		self.round = turn.round
@@ -418,7 +441,7 @@ class Player7(BasePlayer):
 			# An outsider who is hopeless for us even taken at face value gets
 			# blocked, so the engine stops spending our dates on them. Copies
 			# are never blocked: they must stay visible for the shared matching.
-			if self._optimistic(who) <= 0 and not self._kin(who):
+			if self._optimistic(who) <= 0 and not self._ally(who):
 				return Decision(incompatible=True)
 			return Decision()
 
@@ -426,20 +449,20 @@ class Player7(BasePlayer):
 			self.waited = 0
 			# A copy of us waits until both have met everyone, so the matching
 			# is built from the whole market rather than the first few dates.
-			if self.exploring and self._kin(who):
+			if self.exploring and self._ally(who):
 				return Decision()
 			return Decision(again=True, propose=date.date_number >= 2)
 
 		# Someone who already proposed, anyone compatible once the matching has
 		# nobody for us, or anyone compatible near the end.
-		kin = self._kin(who)
-		willing = their > 0 or who in self.proposed_to_me or not kin
+		ally = self._ally(who)
+		willing = their > 0 or who in self.proposed_to_me or not ally
 		late = date.rounds_left <= ENDGAME or self.target is None and not self.exploring
 		bar = self._bar(date.rounds_left)
 		# Someone outside our matching will not wait for us: take them if they
 		# beat both the partner the matching offers and what the rest of the
 		# market is likely to offer.
-		if not kin:
+		if not ally:
 			mine = self._with_me(self.target)[0] if self.target in self.shown else 0
 			if ours >= max(mine, bar):
 				return Decision(again=True, propose=date.date_number >= 2)
