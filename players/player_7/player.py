@@ -78,6 +78,9 @@ COOLDOWN = 10
 STALL = 5
 # In the last few rounds, propose to anyone compatible.
 ENDGAME = 6
+# Spare rounds, beyond one per person, for meeting everyone in a small market
+# before everybody commits on the same round.
+SLACK = 4
 # A person not seen among the candidates for this many rounds has married.
 GONE_AFTER = 3
 # Unanswered proposals or refused repeat dates before we stop counting on
@@ -135,6 +138,12 @@ class Player7(BasePlayer):
 		self.snubs: dict[int, int] = {}
 		self.asked: dict[int, Decision] = {}
 		self.last_new = 0
+		# In a market small enough to meet everyone, the round after which we
+		# stop exploring and commit. It depends only on public numbers, so
+		# everyone who plays this way switches on the same round and plans
+		# from the same knowledge.
+		meet_all = self.people - 1 + SLACK
+		self.commit_after = meet_all if meet_all + ENDGAME < self.rounds else None
 		self.exploring = True
 		self.target: int | None = None
 		self.waited = 0
@@ -382,20 +391,33 @@ class Player7(BasePlayer):
 		self.unmet = len(fresh)
 		limit = self.list_limit if self.list_limit is not None else len(candidates)
 
-		self._retarget()
 		late = turn.rounds_left <= ENDGAME
-		# Keep meeting new people while there is time to meet them all.
-		exploring = (
-			bool(fresh)
-			and turn.round - self.last_new <= STALL
-			and turn.rounds_left > len(fresh) + ENDGAME
-		)
+		if self.commit_after is not None:
+			exploring = turn.round <= self.commit_after
+		else:
+			# Too many people to meet them all from the start: keep meeting new
+			# ones only once there is time to meet everyone who is left.
+			exploring = (
+				bool(fresh)
+				and turn.round - self.last_new <= STALL
+				and turn.rounds_left > len(fresh) + ENDGAME
+			)
 		self.exploring = exploring
+		self._retarget()
 
 		offered = {c.index for c in candidates}
 		target = self.target if self.target in offered else None
 		if target is not None and not exploring:
 			return [target]
+		if exploring and self.commit_after is not None:
+			# Meet everyone once: the person the shared schedule gives us this
+			# round first, then other new faces by how well their ad fits.
+			due = self._scheduled(turn.round)
+			fresh.sort(key=lambda c: (c.index != due, -self._from_ad(c.ad), c.index))
+			chosen = [c.index for c in fresh]
+			if target is not None:
+				chosen.append(target)
+			return chosen[:limit]
 		chosen = [target] if target is not None else []
 		later = []
 		if late or not exploring:
@@ -407,10 +429,24 @@ class Player7(BasePlayer):
 		chosen += [c.index for c in fresh] + later
 		return chosen[:limit]
 
+	def _scheduled(self, round_number: int) -> int:
+		"""Who a round-robin schedule pairs us with this round. Anyone can work
+		it out from N and their own index, and over N-1 rounds it pairs every
+		two people exactly once, so nobody spends a round waiting."""
+		last = self.people - 1
+		turn = (round_number - 1) % last
+		if self.index == last:
+			return turn
+		partner = (2 * turn - self.index) % last
+		return last if partner == self.index else partner
+
 	def _retarget(self) -> None:
 		target = self._assign()
 		if target != self.target:
 			self.target, self.waited = target, 0
+		elif target is not None and self.commit_after is not None and self.exploring:
+			# Before the shared commit round nobody is expected to respond.
+			self.waited = 0
 		elif target is not None:
 			self.waited += 1
 			if self.waited > PATIENCE:
