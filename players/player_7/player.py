@@ -92,9 +92,7 @@ SNUBS = 2
 # The chance that any one person we have yet to meet turns into a real option
 # for us, when deciding how picky to be with outsiders.
 CHANCE = 0.2
-# A stated ideal within this distance of our own profile is flattery.
-MIRROR = 1
-# How far a flatterer may have nudged the value our ad asked for.
+# How far someone who flatters us may have nudged the value our ad asked for.
 NUDGE = 2
 
 
@@ -328,52 +326,53 @@ class Player7(BasePlayer):
 		their += self._cost(ad.seek_dim, ad.seek_value, self.profile[ad.seek_dim])
 		return self.bonus - ours - their / 2
 
-	def _trusted(self, who: int) -> bool:
-		"""Honest people show the same profile every time, matching their ad."""
-		if self._mirror(who):
-			return False
-		stated = self.stated[who]
-		return self._consistent(who) and all(s == stated[0] for s in stated)
-
-	def _consistent(self, who: int) -> bool:
-		"""They show the same profile every time, matching their ad."""
+	def _steady(self, who: int) -> bool:
+		"""They have shown us the same profile on every date."""
 		shown = self.shown[who]
-		if any(p != shown[0] for p in shown):
+		return all(p == shown[0] for p in shown)
+
+	def _candid(self, who: int) -> bool:
+		"""Their stated ideal has never changed and agrees with what their own
+		ad asked for. Ads are posted before anyone meets, so an ideal made up
+		to flatter us afterwards nearly always contradicts the ad."""
+		stated = self.stated[who]
+		if any(s != stated[0] for s in stated):
 			return False
 		ad = self.ads.get(who)
-		return ad is None or shown[0][ad.own_dim] == ad.own_value
+		return ad is None or stated[0][ad.seek_dim] == ad.seek_value
 
-	def _mirror(self, who: int) -> bool:
-		"""Their stated ideal is (almost) exactly our own profile: flattery
-		rather than a real ideal, which an honest person almost never has."""
-		stated = self.stated[who][-1]
-		return sum(abs(a - b) for a, b in zip(stated, self.profile, strict=True)) <= MIRROR
+	def _trusted(self, who: int) -> bool:
+		"""Nothing they have shown or said has contradicted itself."""
+		return self._steady(who) and self._candid(who)
 
 	def _with_me(self, who: int) -> tuple[float, float]:
-		"""(our happiness, their happiness) if we married ``who``. For someone we
-		do not trust, every dimension costs at least what a random person costs."""
+		"""(our happiness, their happiness) if we married ``who``, doubting only
+		what they have given us reason to doubt."""
 		mine, theirs = self._expected_costs()
-		if self._mirror(who) and self._consistent(who):
-			# A flatterer's stated ideal tells us nothing, so assume an average
-			# one. Their profile mostly stands, but the value our ad asked for
-			# may have been nudged in our favour.
-			seek = self.advertise().seek_dim
-			shown = self.shown[who][0]
-			ours = 0.0
-			for dim in range(self.dims):
-				near = range(max(0, shown[dim] - NUDGE), min(10, shown[dim] + NUDGE) + 1)
-				if dim == seek:
-					ours += max(self._cost(dim, self.ideal[dim], v) for v in near)
-				else:
-					ours += self._cost(dim, self.ideal[dim], shown[dim])
-			their = sum(theirs)
-			return self.bonus - ours - their / 2, self.bonus - their - ours / 2
-		trusted = self._trusted(who)
+		steady, ad = self._steady(who), self.ads.get(who)
 		ours = 0.0
 		for dim in range(self.dims):
-			worst = max(self._cost(dim, self.ideal[dim], p[dim]) for p in self.shown[who])
-			ours += worst if trusted else max(worst, mine[dim])
+			cost = max(self._cost(dim, self.ideal[dim], p[dim]) for p in self.shown[who])
+			if not steady:
+				# A profile that changes is worth no more than a stranger's.
+				cost = max(cost, mine[dim])
+			elif ad is not None and dim == ad.own_dim:
+				# Their ad and their profile may disagree on this one trait:
+				# believe whichever is worse for us and take the rest as shown.
+				cost = max(cost, self._cost(dim, self.ideal[dim], ad.own_value))
+			ours += cost
 		their = max(decrement(s, self.profile, self.monotonic) for s in self.stated[who])
+		if not self._candid(who):
+			# Their stated ideal tells us nothing, so assume no better than an
+			# average one, and that whoever tailors an ideal to us may also
+			# have nudged the trait our ad asked for.
+			their = max(their, sum(theirs))
+			seek = self.advertise().seek_dim
+			for p in self.shown[who]:
+				near = range(max(0, p[seek] - NUDGE), min(10, p[seek] + NUDGE) + 1)
+				nudged = max(self._cost(seek, self.ideal[seek], v) for v in near)
+				ours += max(0, nudged - self._cost(seek, self.ideal[seek], p[seek]))
+				break
 		return self.bonus - ours - their / 2, self.bonus - their - ours / 2
 
 	def _optimistic(self, who: int) -> float:
