@@ -36,6 +36,7 @@ from core.distributions import distribution_from_settings  # noqa: E402
 from core.engine import Engine  # noqa: E402
 from core.registry import discover  # noqa: E402
 from models.profile import decrement  # noqa: E402
+from players.player_7.player import _enlarge  # noqa: E402
 
 OURS = '7'
 BONUSES = (50, 100, 200)
@@ -81,64 +82,8 @@ def most_positive(people: list[dict], bonus: float, monotonic: int) -> int:
 
 	near = [[b for b in range(n) if b != a and happy(a, b)] for a in range(n)]
 	match = [-1] * n
-
-	def augment(root: int) -> bool:
-		"""Edmonds' blossom search for one augmenting path from ``root``."""
-		parent, base = [-1] * n, list(range(n))
-		seen = [False] * n
-		seen[root] = True
-		queue = [root]
-
-		def common(a: int, b: int) -> int:
-			marked = [False] * n
-			while True:
-				a = base[a]
-				marked[a] = True
-				if match[a] == -1:
-					break
-				a = parent[match[a]]
-			while True:
-				b = base[b]
-				if marked[b]:
-					return b
-				b = parent[match[b]]
-
-		def contract(v: int, top: int, child: int, inside: list[bool]) -> None:
-			while base[v] != top:
-				inside[base[v]] = inside[base[match[v]]] = True
-				parent[v] = child
-				child = match[v]
-				v = parent[match[v]]
-
-		for v in queue:
-			for u in near[v]:
-				if base[v] == base[u] or match[v] == u:
-					continue
-				if u == root or (match[u] != -1 and parent[match[u]] != -1):
-					top = common(v, u)
-					inside = [False] * n
-					contract(v, top, u, inside)
-					contract(u, top, v, inside)
-					for i in range(n):
-						if inside[base[i]]:
-							base[i] = top
-							if not seen[i]:
-								seen[i] = True
-								queue.append(i)
-				elif parent[u] == -1:
-					parent[u] = v
-					if match[u] == -1:
-						while u != -1:
-							before = parent[u]
-							after = match[before]
-							match[u], match[before] = before, u
-							u = after
-						return True
-					seen[match[u]] = True
-					queue.append(match[u])
-		return False
-
-	return 2 * sum(augment(v) for v in range(n) if match[v] == -1)
+	_enlarge(near, match)
+	return sum(1 for partner in match if partner != -1)
 
 
 def play(job: tuple) -> tuple:

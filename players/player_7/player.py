@@ -120,6 +120,139 @@ def _signed_ad(profile: Profile, ideal: Profile) -> Advertisement:
 	return Advertisement(own_dim=own, own_value=profile[own], seek_dim=seek, seek_value=ideal[seek])
 
 
+def _enlarge(near: list[list[int]], match: list[int]) -> None:
+	"""Grow a matching until no larger one exists (Edmonds' blossom algorithm).
+	``near[i]`` lists who person ``i`` can pair with and ``match[i]`` is their
+	partner or -1. People already matched stay matched, perhaps to someone
+	else."""
+	n = len(near)
+
+	def augment(root: int) -> bool:
+		parent, base = [-1] * n, list(range(n))
+		seen = [False] * n
+		seen[root] = True
+		queue = [root]
+
+		def common(a: int, b: int) -> int:
+			marked = [False] * n
+			while True:
+				a = base[a]
+				marked[a] = True
+				if match[a] == -1:
+					break
+				a = parent[match[a]]
+			while True:
+				b = base[b]
+				if marked[b]:
+					return b
+				b = parent[match[b]]
+
+		def contract(v: int, top: int, child: int, inside: list[bool]) -> None:
+			while base[v] != top:
+				inside[base[v]] = inside[base[match[v]]] = True
+				parent[v] = child
+				child = match[v]
+				v = parent[match[v]]
+
+		for v in queue:
+			for u in near[v]:
+				if base[v] == base[u] or match[v] == u:
+					continue
+				if u == root or (match[u] != -1 and parent[match[u]] != -1):
+					top = common(v, u)
+					inside = [False] * n
+					contract(v, top, u, inside)
+					contract(u, top, v, inside)
+					for i in range(n):
+						if inside[base[i]]:
+							base[i] = top
+							if not seen[i]:
+								seen[i] = True
+								queue.append(i)
+				elif parent[u] == -1:
+					parent[u] = v
+					if match[u] == -1:
+						while u != -1:
+							before = parent[u]
+							after = match[before]
+							match[u], match[before] = before, u
+							u = after
+						return True
+					seen[match[u]] = True
+					queue.append(match[u])
+		return False
+
+	for person in range(n):
+		if match[person] == -1:
+			augment(person)
+
+
+def _match(edges: dict[int, set[int]], weight: dict[tuple[int, int], float]) -> dict[int, int]:
+	"""Pair people up in a compatibility graph: first as many couples as
+	possible, then as much total happiness as we can give them. Returns each
+	matched person's partner. Every step is deterministic, so everyone who
+	starts from the same graph arrives at the same couples.
+
+	It starts with whoever has the fewest options taking their best partner,
+	enlarges that to a largest possible matching, and then repeats two
+	improvements that keep the number of couples: someone trades their partner
+	for a leftover person they are happier with, or two couples swap partners
+	for a higher total. Each raises the total, so the search always ends."""
+	people = sorted(edges)
+	spot = {p: i for i, p in enumerate(people)}
+	near = [sorted(spot[q] for q in edges[p]) for p in people]
+	fits = [set(row) for row in near]
+	n = len(people)
+
+	def worth(a: int, b: int) -> float:
+		x, y = people[a], people[b]
+		return weight[(x, y) if x < y else (y, x)]
+
+	match = [-1] * n
+	left = [set(row) for row in near]
+	while True:
+		live = [i for i in range(n) if left[i]]
+		if not live:
+			break
+		u = min(live, key=lambda i: (len(left[i]), i))
+		v = min(left[u], key=lambda i: (-worth(u, i), i))
+		match[u], match[v] = v, u
+		for x in (u, v):
+			for y in left[x]:
+				left[y].discard(x)
+			left[x] = set()
+	_enlarge(near, match)
+
+	improved = True
+	while improved:
+		improved = False
+		for u in range(n):
+			if match[u] != -1:
+				continue
+			# Every neighbour of a leftover person is matched, or the matching
+			# would not be the largest.
+			for a in near[u]:
+				if worth(a, u) > worth(a, match[a]):
+					match[match[a]] = -1
+					match[a], match[u] = u, a
+					improved = True
+					break
+		for a in range(n):
+			for c in range(a + 1, n):
+				b, d = match[a], match[c]
+				if b < a or d < c:
+					continue
+				best, now = None, worth(a, b) + worth(c, d)
+				for (p, q), (r, t) in (((a, c), (b, d)), ((a, d), (b, c))):
+					if q in fits[p] and t in fits[r] and worth(p, q) + worth(r, t) > now:
+						best, now = ((p, q), (r, t)), worth(p, q) + worth(r, t)
+				if best:
+					for p, q in best:
+						match[p], match[q] = q, p
+					improved = True
+	return {people[i]: people[j] for i, j in enumerate(match) if j != -1}
+
+
 class Player7(BasePlayer):
 	"""One honest person who marries the partner a shared matching assigns."""
 
@@ -286,7 +419,7 @@ class Player7(BasePlayer):
 	def _assign(self) -> int | None:
 		"""Our partner in the matching of every single we know, or None.
 
-		Every copy of this player that knows the same people builds the same
+		Everyone who plays this way and knows the same people builds the same
 		graph and gets the same answer, so assignments agree."""
 		me = self.index
 		people = sorted(self._singles())
@@ -308,20 +441,7 @@ class Player7(BasePlayer):
 					edges[b].add(a)
 					weight[(min(a, b), max(a, b))] = total
 
-		# Repeatedly match the person with the fewest compatible partners to
-		# their neighbour with the fewest, breaking ties by total happiness.
-		while True:
-			live = [p for p in edges if edges[p]]
-			if not live:
-				return None
-			u = min(live, key=lambda p: (len(edges[p]), p))
-			v = min(edges[u], key=lambda p: (len(edges[p]), -weight[(min(u, p), max(u, p))], p))
-			if me in (u, v):
-				return v if u == me else u
-			for x in (u, v):
-				for y in edges[x]:
-					edges[y].discard(x)
-				edges[x] = set()
+		return _match(edges, weight).get(me)
 
 	def _market(self) -> tuple[float, float]:
 		"""Mean and spread of our happiness with a random partner.
@@ -418,12 +538,17 @@ class Player7(BasePlayer):
 		if target is not None and not exploring:
 			return [target]
 		if exploring and self.commit_after is not None:
-			# Meet everyone once: the person the shared schedule gives us this
-			# round first, then other new faces by how well their ad fits.
+			# Meet everyone once. The engine pairs us with anyone on our list
+			# who also listed us, in no particular order, so the only way to
+			# keep to the shared schedule is to name nobody else.
 			due = self._scheduled(turn.round)
-			fresh.sort(key=lambda c: (c.index != due, -self._from_ad(c.ad), c.index))
+			if any(c.index == due for c in fresh):
+				return [due]
+			# They are gone or we have met: any new face, best-fitting ads
+			# kept if the list has to be cut.
+			fresh.sort(key=lambda c: (-self._from_ad(c.ad), c.index))
 			chosen = [c.index for c in fresh]
-			if target is not None:
+			if not chosen and target is not None:
 				chosen.append(target)
 			return chosen[:limit]
 		chosen = [target] if target is not None else []
