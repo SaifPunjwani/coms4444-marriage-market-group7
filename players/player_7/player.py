@@ -375,6 +375,18 @@ class Player7(BasePlayer):
 				break
 		return self.bonus - ours - their / 2, self.bonus - their - ours / 2
 
+	def _masking(self, who: int) -> float:
+		"""How much worse for us ``who`` would be if every 2 or 8 they show on
+		a non-monotonic trait were really something more extreme. Showing a
+		value two steps in from the end of the scale is how a profile hides a
+		0 or a 10, and nothing about one person can tell the two apart."""
+		shown, extra = self.shown[who][0], 0.0
+		for dim in range(self.monotonic, self.dims):
+			beyond = {2: (0, 1), 8: (9, 10)}.get(shown[dim], ())
+			worst = max((self._cost(dim, self.ideal[dim], v) for v in beyond), default=0)
+			extra += max(0, worst - self._cost(dim, self.ideal[dim], shown[dim]))
+		return extra
+
 	def _optimistic(self, who: int) -> float:
 		"""Our happiness with ``who`` if what they showed and said were true."""
 		ours = min(
@@ -614,6 +626,12 @@ class Player7(BasePlayer):
 			return Decision()
 
 		ally = self._ally(who)
+		# In a market too big to meet everyone there is always someone else to
+		# try, so we do not stake a marriage on a value that may be masked.
+		# Near the end, a doubtful match still beats none.
+		roomy = self.commit_after is None and date.rounds_left > ENDGAME
+		if roomy and not (ally and self.recognise) and ours <= self._masking(who):
+			return Decision()
 		# Whether they will hold off until everyone has met everyone, as the
 		# shared matching needs. A signed copy always does. With recognition
 		# off we cannot know who does, so we assume it of every honest person

@@ -2,7 +2,7 @@
 
     uv run players/player_7/compare.py                 recognition on against off
     uv run players/player_7/compare.py --base main     also the player committed on a git ref
-    uv run players/player_7/compare.py --big           add 1000-person markets (slower)
+    uv run players/player_7/compare.py --big 8         add 1000-person markets on 8 seeds
     uv run players/player_7/compare.py --seeds 20      more seeds (default 10)
 
 Every version plays the seats this group would hold in the end-of-project
@@ -121,7 +121,9 @@ def play(job: tuple) -> tuple:
 	)
 
 
-def schedule(versions: list[str], seeds: list[int], big: bool) -> tuple[list, list]:
+def schedule(versions: list[str], seeds: list[int], big: int) -> tuple[list, list]:
+	"""Every market to play: the small ones on all seeds, and the 1000-person
+	mixed market on the first ``big`` seeds plus one market of 1000 copies."""
 	codes = list(groups())
 	rivals = [code for code in codes if code != OURS]
 	small, large = [], []
@@ -138,7 +140,7 @@ def schedule(versions: list[str], seeds: list[int], big: bool) -> tuple[list, li
 				small.append((version, 'mix', mix, settings))
 		if big:
 			settings = {'rounds': 150, 'bonus': 100, 'class_map': True}
-			for seed in seeds[:4]:
+			for seed in seeds[:big]:
 				roster = [code for code in codes for _ in range(100)]
 				large.append((version, 'big mix', roster, settings | {'seed': seed}))
 			large.append((version, 'big solo', [OURS] * 1000, settings | {'seed': seeds[0]}))
@@ -183,7 +185,9 @@ def main() -> None:
 	parser.add_argument('versions', nargs='*', help='on, off, or a git ref (default: on off)')
 	parser.add_argument('--base', action='append', default=[], help='a git ref to include')
 	parser.add_argument('--seeds', type=int, default=10, help='seeds 1..N (default 10)')
-	parser.add_argument('--big', action='store_true', help='add 1000-person markets')
+	parser.add_argument(
+		'--big', type=int, nargs='?', const=4, default=0, help='add 1000-person markets on N seeds'
+	)
 	parser.add_argument('--jobs', type=int, default=6, help='parallel processes (default 6)')
 	parser.add_argument('--timeout', type=float, default=1.0, help='seconds per player call')
 	args = parser.parse_args()
