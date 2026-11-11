@@ -7,38 +7,53 @@ therefore knows the whole compatibility graph among the singles they have met:
 an edge joins two people when both would end up with positive happiness.
 
 Our primary goal is the share of people with positive happiness, which is the
-size of a matching in that graph. Every copy of this player computes the same
-deterministic matching from the same information and pursues only its assigned
-partner, so copies agree on who marries whom without sharing any state. The
-matching repeatedly pairs the person with the fewest compatible partners, so
-people with many options do not take the only option of someone with few.
+size of a matching in that graph. Everyone who plays this way computes the
+same deterministic matching from the same information and pursues only their
+assigned partner, so they agree on who marries whom without sharing any state.
+The matching has as many couples as possible, and among such matchings we
+search for the happiest one, which serves the secondary goal.
 
-Who joins the shared matching depends on RECOGNISE. Turned off, everyone who
-has been honest with us joins it, our ad is an ordinary one, and nothing in
-this file tells a copy of this player from any other honest person. Turned on,
-our ad's dimensions are a checksum of our true profile and ideal, which a date
-reveals, and only people whose ad carries that signature join. Anyone left out
-will not wait for a matching they do not compute, so we take them once they
-beat both our assigned partner and a patience bar: what we expect to end up
-with if we hold out for the people we can still meet. The bar is reasoned dimension by dimension. Under the values
-we have seen, each dimension has an expected cost and a variance, and since
-dimensions are drawn independently these add up to the mean and spread of our
-happiness with a random partner. The bar falls to zero as the unmet people
-run out, so we stay picky early and never miss the end. We stop counting on
-anyone who snubs us twice, and we block outsiders who are hopeless for us so
-the engine stops spending our dates on them.
+Who joins the shared matching depends on RECOGNISE.
 
-1. Explore: list people we have not met, ranked by how well their ad fits us.
-2. Commit: once we have met everyone, list only our assigned partner, ask for
-   repeat dates, and propose from the second date on.
-3. Fall back: if the assigned partner does not respond, or time is running
-   out, propose to any compatible person, best first.
+- Off: everyone who has been honest with us joins. Our ad is an ordinary one,
+  and nothing in this file tells a copy of this player from any other honest
+  person.
+- On: our ad's dimensions are a checksum of our true profile and ideal, which
+  a date reveals, and only people whose ad carries that signature join.
 
-We never propose unless our own happiness would be positive. A partner whose
-projected profile changes between dates or contradicts their ad is treated as
-no better than a random person and is left out of the shared graph. A partner
-whose stated ideal is just our own profile is flattering us: we assume an
-average ideal for them and that the value our ad asked for was nudged by 2.
+A market small enough to meet everyone (N is well under t) is played in three
+stages, all timed by public numbers so that everyone switches together:
+
+1. Meet: for N-1 rounds plus a few spare, date each person once, in a
+   round-robin order anyone can compute from N and their own index. Nobody is
+   taken early, because each early marriage removes a partner the matching
+   could have placed. The exception is a market that is emptying anyway: once
+   more than half of it has married, we take whoever beats a patience bar.
+2. Commit: list only our assigned partner and propose.
+3. Fall back: if they do not respond, or time is running out, propose to any
+   compatible person.
+
+A market too big to meet everyone has no such clock. There we hold out for a
+patience bar: what we expect to end up with from the people we can still
+meet. It is reasoned dimension by dimension. Under the values we have seen,
+each dimension has an expected cost and a variance, and since dimensions are
+drawn independently these add up to the mean and spread of our happiness with
+a random partner. The number of people we can still meet is limited by how
+fast the market is emptying, so the bar is low in a brisk market and falls to
+zero at the end.
+
+We never propose unless our own happiness would be positive, and we doubt only
+what a partner has contradicted. A profile that changes between dates is worth
+no more than a stranger's. An ad and a profile that disagree cost the worse of
+the two on that trait. A stated ideal that changes, or disagrees with what
+their own ad asked for, is flattery: we assume an average ideal instead. In a
+big market we also hold off when a marriage would be negative if every 2 or 8
+they show were really a 0 or a 10, which is how a profile masks its extremes.
+We stop counting on anyone who snubs us twice, and we block people who are
+hopeless for us so the engine stops spending our dates on them.
+
+compare.py in this folder measures any two versions of this player, or the two
+settings of RECOGNISE, on the same seeds and seats.
 """
 
 import math
@@ -78,20 +93,20 @@ COOLDOWN = 10
 STALL = 5
 # In the last few rounds, propose to anyone compatible.
 ENDGAME = 6
-# The share of the market that must still be single for us to keep holding
-# out for the shared matching rather than take early offers.
+# The share of the people we set out to meet that must still be single for us
+# to keep holding out for the shared matching rather than take early offers.
 WAITING = 0.5
+# How many rounds we assume a single person stays available in a large market
+# before anyone has had time to marry and show us how fast it really empties.
+BRISK = 8
 # Spare rounds, beyond one per person, for meeting everyone in a small market
 # before everybody commits on the same round.
 SLACK = 4
 # A person not seen among the candidates for this many rounds has married.
 GONE_AFTER = 3
 # Unanswered proposals or refused repeat dates before we stop counting on
-# someone outside our group: they keep dating us but will not marry us.
+# someone outside the matching: they keep dating us but will not marry us.
 SNUBS = 2
-# The chance that any one person we have yet to meet turns into a real option
-# for us, when deciding how picky to be with outsiders.
-CHANCE = 0.2
 # How far someone who flatters us may have nudged the value our ad asked for.
 NUDGE = 2
 
@@ -254,6 +269,7 @@ def _match(edges: dict[int, set[int]], weight: dict[tuple[int, int], float]) -> 
 class Player7(BasePlayer):
 	"""One honest person who marries the partner a shared matching assigns."""
 
+	# A class attribute so that a subclass can run the other setting alongside.
 	recognise = RECOGNISE
 
 	def __init__(self, snapshot: PlayerSnapshot, ctx: GameContext) -> None:
@@ -279,10 +295,19 @@ class Player7(BasePlayer):
 		meet_all = self.people - 1 + SLACK
 		self.commit_after = meet_all if meet_all + ENDGAME < self.rounds else None
 		self.exploring = True
-		# Whether most of the market has already married: then few people are
-		# left to plan with, and waiting for the shared matching costs more
-		# than it gains.
+		# Whether the people we could plan with are marrying off without
+		# waiting: then holding out for the shared matching costs more than it
+		# gains. ``pool`` is how many singles there were when meeting everyone
+		# became possible, which in a small market is everybody.
 		self.hasty = False
+		self.pool: int | None = None
+		# Singles at the start of each round, and from that how many more
+		# rounds a single person can be expected to stay available.
+		self.census: list[int] = []
+		self.outlook = math.inf
+		# Whether there are more new people than rounds left to meet them in:
+		# then there is always someone else to try.
+		self.roomy = False
 		self.target: int | None = None
 		self.waited = 0
 		self.round = 0
@@ -474,40 +499,58 @@ class Player7(BasePlayer):
 		return mean, math.sqrt(variance)
 
 	def _bar(self, rounds_left: int) -> float:
-		"""The happiness an outsider must offer us now: what we expect to end up
+		"""The happiness someone must offer us now: what we expect to end up
 		with if we hold out for the people we can still meet.
 
 		Holding out with nobody left to meet is worth zero. Each further person
-		is a random partner who turns into a real option with probability
-		CHANCE, and raises the bar by the amount they are expected to beat it.
-		It falls to zero as the unmet people run out."""
+		is a random partner who raises the bar by the amount they are expected
+		to beat it. In a market too big to meet everyone the people we can
+		still meet are also limited by how long singles stay single, so the
+		bar is low when the market empties fast. It falls to zero as the
+		chances run out."""
 		mean, spread = self._market()
 		bar = 0.0
 		if spread <= 0:
 			return bar
-		for _ in range(min(self.unmet, max(0, rounds_left - ENDGAME))):
+		chances = min(self.unmet, max(0, rounds_left - ENDGAME))
+		if self.commit_after is None:
+			chances = min(chances, int(self.outlook))
+		for _ in range(chances):
 			z = (mean - bar) / spread
-			gain = CHANCE * spread * (NORMAL.pdf(z) + z * NORMAL.cdf(z))
+			gain = spread * (NORMAL.pdf(z) + z * NORMAL.cdf(z))
 			if gain < 0.01:
 				break
 			bar += gain
 		return bar
+
+	def _life(self) -> float:
+		"""How many more rounds a single person can be expected to stay single,
+		judged by how fast the market has been emptying lately. Nobody can
+		marry before the second date, so the first rounds go by a guess."""
+		seen = self.census
+		if len(seen) < 3:
+			return BRISK
+		span = min(3, len(seen) - 2)
+		kept = (seen[-1] / seen[-1 - span]) ** (1 / span)
+		return kept / (1 - kept) if kept < 1 else math.inf
 
 	def _snubbed(self, who: int) -> bool:
 		if who in self.proposed_to_me or self._ally(who):
 			return False
 		return self.snubs.get(who, 0) >= SNUBS
 
-	def _best_compatible(self) -> list[int]:
-		"""Singles we would be positive with, best for us first. Outsiders count
-		even when we think they would not be: whether to accept is their call."""
+	def _best_compatible(self, least: float = 0.0) -> list[int]:
+		"""Singles we would be positive with, and at least ``least`` happy, best
+		for us first. People outside the matching count even when we think
+		they would not be positive themselves: whether to accept is their
+		call."""
 		scored = []
 		for who in self.shown:
 			if self.round - self.last_seen.get(who, -GONE_AFTER) >= GONE_AFTER:
 				continue
 			ours, their = self._with_me(who)
 			likely = their > 0 or who in self.proposed_to_me
-			if ours > 0 and (likely or not self._ally(who)):
+			if ours > 0 and ours >= least and (likely or not self._ally(who)):
 				scored.append((not self._snubbed(who), likely, ours, who))
 		return [who for *_, who in sorted(scored, reverse=True)]
 
@@ -521,31 +564,20 @@ class Player7(BasePlayer):
 		return _plain_ad(self.profile, self.ideal, self.monotonic)
 
 	def choose_dates(self, candidates: tuple[Candidate, ...], turn: RoundContext) -> list[int]:
-		self.round = turn.round
-		for c in candidates:
-			self.ads[c.index] = c.ad
-			self.last_seen[c.index] = turn.round
-		fresh = [c for c in candidates if c.index not in self.shown]
-		self.unmet = len(fresh)
-		self.hasty = turn.singles < WAITING * self.people
+		fresh = self._take_stock(candidates, turn)
 		limit = self.list_limit if self.list_limit is not None else len(candidates)
-
 		late = turn.rounds_left <= ENDGAME
-		if self.commit_after is not None:
-			exploring = turn.round <= self.commit_after
-		else:
-			# Too many people to meet them all from the start: keep meeting new
-			# ones only once there is time to meet everyone who is left.
-			exploring = (
-				bool(fresh)
-				and turn.round - self.last_new <= STALL
-				and turn.rounds_left > len(fresh) + ENDGAME
-			)
-		self.exploring = exploring
-		self._retarget()
+		exploring = self.exploring
 
 		offered = {c.index for c in candidates}
 		target = self.target if self.target in offered else None
+		# While there are more people than we can ever meet, we hold out for
+		# what the rest of the market is likely to offer.
+		least = 0.0
+		if self.roomy:
+			least = self._bar(turn.rounds_left)
+			if target is not None and self._with_me(target)[0] < least:
+				target, self.waited = None, 0
 		if target is not None and not exploring:
 			return [target]
 		if exploring and self.commit_after is not None:
@@ -565,13 +597,53 @@ class Player7(BasePlayer):
 		chosen = [target] if target is not None else []
 		later = []
 		if late or not exploring:
-			for w in self._best_compatible():
+			for w in self._best_compatible(least):
 				if w in offered and w not in chosen:
 					# Someone who keeps turning us down goes behind new faces.
 					(later if self._snubbed(w) else chosen).append(w)
 		fresh.sort(key=lambda c: (-self._from_ad(c.ad), c.index))
 		chosen += [c.index for c in fresh] + later
 		return chosen[:limit]
+
+	def _take_stock(self, candidates: tuple[Candidate, ...], turn: RoundContext) -> list[Candidate]:
+		"""Update what we know about the market at the start of a round, and
+		return the candidates we have not met."""
+		self.round = turn.round
+		for c in candidates:
+			self.ads[c.index] = c.ad
+			self.last_seen[c.index] = turn.round
+		fresh = [c for c in candidates if c.index not in self.shown]
+		self.unmet = len(fresh)
+		self.census.append(turn.singles)
+		if self.commit_after is None:
+			self.outlook = min(self.outlook, self._life())
+
+		late = turn.rounds_left <= ENDGAME
+		self.roomy = (
+			self.commit_after is None and not late and len(fresh) + ENDGAME >= turn.rounds_left
+		)
+		if self.commit_after is not None:
+			self.pool = self.people
+		elif self.roomy:
+			self.pool = None
+		elif self.pool is None:
+			self.pool = turn.singles
+		# Nobody waits in a market too big to plan for. Otherwise people are
+		# waiting as long as at least half of them are still here.
+		self.hasty = self.pool is None or turn.singles < WAITING * self.pool
+
+		if self.commit_after is not None:
+			self.exploring = turn.round <= self.commit_after
+		else:
+			# Too many people to meet them all from the start: keep meeting new
+			# ones only once there is time to meet everyone who is left.
+			self.exploring = (
+				bool(fresh)
+				and turn.round - self.last_new <= STALL
+				and turn.rounds_left > len(fresh) + ENDGAME
+			)
+		self._retarget()
+		return fresh
 
 	def _scheduled(self, round_number: int) -> int:
 		"""Who a round-robin schedule pairs us with this round. Anyone can work
@@ -618,19 +690,19 @@ class Player7(BasePlayer):
 	def _decide(self, date: DateContext, who: int) -> Decision:
 		ours, their = self._with_me(who)
 		if ours <= 0:
-			# An outsider who is hopeless for us even taken at face value gets
-			# blocked, so the engine stops spending our dates on them. Copies
-			# are never blocked: they must stay visible for the shared matching.
+			# Someone who is hopeless for us even taken at face value gets
+			# blocked, so the engine stops spending our dates on them. People in
+			# the shared matching are never blocked: they must stay visible.
 			if self._optimistic(who) <= 0 and not self._ally(who):
 				return Decision(incompatible=True)
 			return Decision()
 
 		ally = self._ally(who)
-		# In a market too big to meet everyone there is always someone else to
-		# try, so we do not stake a marriage on a value that may be masked.
-		# Near the end, a doubtful match still beats none.
-		roomy = self.commit_after is None and date.rounds_left > ENDGAME
-		if roomy and not (ally and self.recognise) and ours <= self._masking(who):
+		# While there are more people than we can ever meet there is always
+		# someone else to try, so we do not stake a marriage on a value that
+		# may be masked. Once the market has shrunk, or near the end, a
+		# doubtful match still beats none.
+		if self.roomy and not (ally and self.recognise) and ours <= self._masking(who):
 			return Decision()
 		# Whether they will hold off until everyone has met everyone, as the
 		# shared matching needs. A signed copy always does. With recognition
@@ -643,11 +715,15 @@ class Player7(BasePlayer):
 			self.waited = 0
 			if self.exploring and (waits or ours < bar):
 				return Decision()
+			if self.roomy and ours < bar:
+				return Decision()
 			return Decision(again=True, propose=date.date_number >= 2)
 
 		# Someone who already proposed, anyone compatible once the matching has
 		# nobody for us, or anyone compatible near the end.
 		late = date.rounds_left <= ENDGAME or self.target is None and not self.exploring
+		if self.roomy and ours < bar:
+			late = False
 		# Someone who will not wait for the matching: take them if they beat
 		# both the partner it offers us and what the rest of the market is
 		# likely to offer. Not while we are still meeting everyone, though,
