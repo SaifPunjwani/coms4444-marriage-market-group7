@@ -58,9 +58,6 @@ big market we also hold off when a marriage would be negative if every 2 or 8
 they show were really a 0 or a 10, which is how a profile masks its extremes.
 We stop counting on anyone who snubs us twice, and we block people who are
 hopeless for us so the engine stops spending our dates on them.
-
-compare.py in this folder measures any two versions of this player, or the two
-settings of RECOGNISE, on the same seeds and seats.
 """
 
 import math
