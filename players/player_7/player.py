@@ -13,9 +13,13 @@ partner, so copies agree on who marries whom without sharing any state. The
 matching repeatedly pairs the person with the fewest compatible partners, so
 people with many options do not take the only option of someone with few.
 
-Copies recognise each other honestly: our ad's dimensions are a checksum of
-our true profile and ideal, which a date reveals. Only recognised copies go
-into the shared matching. Anyone else will not wait for a matching they do not
+Who joins the shared matching depends on RECOGNISE. Off, everyone who has been
+honest with us joins, our ad is an ordinary one, and nothing in this file
+tells a copy of this player from any other honest person. On, our ad's
+dimensions are a checksum of our true profile and ideal, which a date reveals,
+and only people whose ad carries that signature join.
+
+Anyone left out of the shared matching will not wait for a plan they do not
 compute, so we take them once they beat both our assigned partner and a
 patience bar: what we expect to end up with if we hold out for the people we
 can still meet. The bar is reasoned dimension by dimension. Under the values
@@ -60,6 +64,11 @@ from models.profile import Profile, decrement
 VALUES = range(11)
 NORMAL = NormalDist()
 
+# Whether to single out copies of this player. Off: the shared matching is open
+# to every honest person and nothing here identifies a copy. On: our ad is a
+# signature, and only people who carry it join the matching.
+RECOGNISE = False
+
 # Pseudo-counts per value before any date: a broad bell around 5, so the first
 # ad-based estimates are sensible and real observations soon dominate.
 PRIOR = [0.5 + 1.5 * math.exp(-((v - 5) ** 2) / 12.5) for v in VALUES]
@@ -91,6 +100,15 @@ MIRROR = 1
 NUDGE = 2
 
 
+def _plain_ad(profile: Profile, ideal: Profile, monotonic: int) -> Advertisement:
+	"""An ordinary honest ad: the monotonic trait we score best on, and the
+	dimension where our ideal is furthest from the middle of the scale."""
+	showable = range(monotonic) if monotonic else range(len(profile))
+	own = max(showable, key=lambda dim: profile[dim])
+	seek = max(range(len(ideal)), key=lambda dim: abs(ideal[dim] - 5))
+	return Advertisement(own_dim=own, own_value=profile[own], seek_dim=seek, seek_value=ideal[seek])
+
+
 def _ad(profile: Profile, ideal: Profile) -> Advertisement:
 	"""Our honest ad, with both dimensions picked by a checksum of our profile
 	and ideal. A date shows us a partner's true profile and ideal, and if they
@@ -106,6 +124,8 @@ def _ad(profile: Profile, ideal: Profile) -> Advertisement:
 
 class Player7(BasePlayer):
 	"""One honest person who marries the partner a shared matching assigns."""
+
+	recognise = RECOGNISE
 
 	def __init__(self, snapshot: PlayerSnapshot, ctx: GameContext) -> None:
 		super().__init__(snapshot, ctx)
@@ -245,11 +265,14 @@ class Player7(BasePlayer):
 	# ------------------------------------------------------------------
 
 	def _kin(self, who: int) -> bool:
-		"""Whether ``who`` runs this player: honest, and their ad is exactly the
-		one we would write for the profile and ideal they showed us."""
-		return self._trusted(who) and self.ads.get(who) == _ad(
-			self.shown[who][0], self.stated[who][0]
-		)
+		"""Whether ``who`` joins the shared matching: honest with us and, when
+		we single out copies, their ad is exactly the one we would write for
+		the profile and ideal they showed us."""
+		if not self._trusted(who):
+			return False
+		if not self.recognise:
+			return True
+		return self.ads.get(who) == _ad(self.shown[who][0], self.stated[who][0])
 
 	def _singles(self) -> list[int]:
 		return [
@@ -360,7 +383,9 @@ class Player7(BasePlayer):
 	# ------------------------------------------------------------------
 
 	def advertise(self) -> Advertisement:
-		return _ad(self.profile, self.ideal)
+		if self.recognise:
+			return _ad(self.profile, self.ideal)
+		return _plain_ad(self.profile, self.ideal, self.monotonic)
 
 	def choose_dates(self, candidates: tuple[Candidate, ...], turn: RoundContext) -> list[int]:
 		self.round = turn.round
