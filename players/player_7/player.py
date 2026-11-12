@@ -40,6 +40,10 @@ the engine stops spending our dates on them.
 3. Fall back: if the assigned partner does not respond, or time is running
    out, propose to any compatible person, best first.
 
+While a small market is still meeting we take nobody early, in the matching or
+not: every early marriage removes a partner the matching could have placed.
+The exception is a market where half the people have already married.
+
 We never propose unless our own happiness would be positive. A partner whose
 projected profile changes between dates or contradicts their ad is treated as
 no better than a random person and is left out of the shared graph. A partner
@@ -87,6 +91,9 @@ ENDGAME = 6
 # Spare rounds, beyond one per person, for meeting everyone in a small market
 # before everybody commits on the same round.
 SLACK = 4
+# The share of the market that must still be single for us to keep holding
+# out for the shared matching rather than take early offers.
+WAITING = 0.5
 # A person not seen among the candidates for this many rounds has married.
 GONE_AFTER = 3
 # Unanswered proposals or refused repeat dates before we stop counting on
@@ -154,6 +161,9 @@ class Player7(BasePlayer):
 		meet_all = self.people - 1 + SLACK
 		self.commit_after = meet_all if meet_all + ENDGAME < self.rounds else None
 		self.exploring = True
+		# Whether too little of the market is left to plan with: more than half
+		# of it has married, or it was too big to plan for in the first place.
+		self.hasty = False
 		self.target: int | None = None
 		self.waited = 0
 		self.round = 0
@@ -401,6 +411,7 @@ class Player7(BasePlayer):
 		limit = self.list_limit if self.list_limit is not None else len(candidates)
 
 		late = turn.rounds_left <= ENDGAME
+		self.hasty = self.commit_after is None or turn.singles < WAITING * self.people
 		# Once we have met a few people and fewer than a quarter of them join
 		# the shared matching, it has little to wait for, so we stop exploring.
 		# (A quarter, not half: in a market shared evenly with one other group
@@ -502,24 +513,30 @@ class Player7(BasePlayer):
 				return Decision(incompatible=True)
 			return Decision()
 
+		kin = self._kin(who)
+		# Whether they will hold off until everyone has met everyone, as the
+		# shared matching needs. A recognised copy always does. With recognition
+		# off we cannot know who does, so we assume it of every honest person
+		# until half the market has married without waiting.
+		waits = kin and (self.recognise or not self.hasty)
+		bar = self._bar(date.rounds_left)
 		if who == self.target:
 			self.waited = 0
-			# A copy of us waits until both have met everyone, so the matching
-			# is built from the whole market rather than the first few dates.
-			if self.exploring and self._kin(who):
+			# While we are both still meeting everyone we hold off, so the
+			# matching is built from the whole market, not the first few dates.
+			if self.exploring and (waits or ours < bar):
 				return Decision()
 			return Decision(again=True, propose=date.date_number >= 2)
 
 		# Someone who already proposed, anyone compatible once the matching has
 		# nobody for us, or anyone compatible near the end.
-		kin = self._kin(who)
 		willing = their > 0 or who in self.proposed_to_me or not kin
 		late = date.rounds_left <= ENDGAME or self.target is None and not self.exploring
-		bar = self._bar(date.rounds_left)
-		# Someone outside our matching will not wait for us: take them if they
-		# beat both the partner the matching offers and what the rest of the
-		# market is likely to offer.
-		if not kin:
+		# Someone who will not wait for the matching: take them if they beat
+		# both the partner it offers us and what the rest of the market is
+		# likely to offer. Not while we are still meeting everyone, though,
+		# unless the market is emptying around us.
+		if not waits and willing and (self.hasty or not self.exploring):
 			mine = self._with_me(self.target)[0] if self.target in self.shown else 0
 			if ours >= max(mine, bar):
 				return Decision(again=True, propose=date.date_number >= 2)
