@@ -30,9 +30,13 @@ run out, so we stay picky early and never miss the end. We stop counting on
 anyone who snubs us twice, and we block outsiders who are hopeless for us so
 the engine stops spending our dates on them.
 
-1. Explore: list people we have not met, ranked by how well their ad fits us.
-2. Commit: once we have met everyone, list only our assigned partner, ask for
-   repeat dates, and propose from the second date on.
+1. Explore: meet the people we have not met. In a market small enough to meet
+   everyone (N well under t) we date them in a round-robin order anyone can
+   compute from N and their own index, and stop on a round fixed by N, so
+   everyone who plays this way commits together. In a bigger market we list
+   new people ranked by how well their ad fits us.
+2. Commit: list only our assigned partner, ask for repeat dates, and propose
+   from the second date on.
 3. Fall back: if the assigned partner does not respond, or time is running
    out, propose to any compatible person, best first.
 
@@ -80,13 +84,16 @@ COOLDOWN = 10
 STALL = 5
 # In the last few rounds, propose to anyone compatible.
 ENDGAME = 6
+# Spare rounds, beyond one per person, for meeting everyone in a small market
+# before everybody commits on the same round.
+SLACK = 4
 # A person not seen among the candidates for this many rounds has married.
 GONE_AFTER = 3
 # Unanswered proposals or refused repeat dates before we stop counting on
 # someone outside our group: they keep dating us but will not marry us.
 SNUBS = 2
-# People met before we judge whether enough of the market is our copies to
-# keep exploring for the shared matching.
+# People met before we judge whether enough of the market joins the shared
+# matching to keep exploring for it.
 SCOUT = 8
 # The chance that any one person we have yet to meet turns into a real option
 # for us, when deciding how picky to be with outsiders.
@@ -140,6 +147,12 @@ class Player7(BasePlayer):
 		self.snubs: dict[int, int] = {}
 		self.asked: dict[int, Decision] = {}
 		self.last_new = 0
+		# In a market small enough to meet everyone, the round after which we
+		# stop exploring and commit. It depends only on public numbers, so
+		# everyone who plays this way switches on the same round and plans
+		# from the same knowledge.
+		meet_all = self.people - 1 + SLACK
+		self.commit_after = meet_all if meet_all + ENDGAME < self.rounds else None
 		self.exploring = True
 		self.target: int | None = None
 		self.waited = 0
@@ -387,26 +400,45 @@ class Player7(BasePlayer):
 		self.unmet = len(fresh)
 		limit = self.list_limit if self.list_limit is not None else len(candidates)
 
-		self._retarget()
 		late = turn.rounds_left <= ENDGAME
-		# Keep meeting new people while there is time to meet them all. Once we
-		# have met a few people and fewer than half are our copies, the shared
-		# matching has little to wait for, so we stop exploring.
-		exploring = (
-			bool(fresh)
-			and (
-				len(self.shown) < SCOUT
-				or 2 * sum(self._kin(who) for who in self.shown) >= len(self.shown)
+		# Once we have met a few people and fewer than a quarter of them join
+		# the shared matching, it has little to wait for, so we stop exploring.
+		# (A quarter, not half: in a market shared evenly with one other group
+		# just under half the people we meet are copies.)
+		met = len(self.shown)
+		exploring = met < SCOUT or 4 * sum(self._kin(who) for who in self.shown) >= met
+		if self.commit_after is not None:
+			exploring = exploring and turn.round <= self.commit_after
+		else:
+			# Too many people to meet them all from the start: keep meeting new
+			# ones only once there is time to meet everyone who is left.
+			exploring = (
+				exploring
+				and bool(fresh)
+				and turn.round - self.last_new <= STALL
+				and turn.rounds_left > len(fresh) + ENDGAME
 			)
-			and turn.round - self.last_new <= STALL
-			and turn.rounds_left > len(fresh) + ENDGAME
-		)
 		self.exploring = exploring
+		self._retarget()
 
 		offered = {c.index for c in candidates}
 		target = self.target if self.target in offered else None
 		if target is not None and not exploring:
 			return [target]
+		if exploring and self.commit_after is not None:
+			# Meet everyone once. The engine pairs us with anyone on our list
+			# who also listed us, in no particular order, so the only way to
+			# keep to the shared schedule is to name nobody else.
+			due = self._scheduled(turn.round)
+			if any(c.index == due for c in fresh):
+				return [due]
+			# They are gone or we have met: any new face, best-fitting ads
+			# kept if the list has to be cut.
+			fresh.sort(key=lambda c: (-self._from_ad(c.ad), c.index))
+			chosen = [c.index for c in fresh]
+			if not chosen and target is not None:
+				chosen.append(target)
+			return chosen[:limit]
 		chosen = [target] if target is not None else []
 		later = []
 		if late or not exploring:
@@ -418,10 +450,24 @@ class Player7(BasePlayer):
 		chosen += [c.index for c in fresh] + later
 		return chosen[:limit]
 
+	def _scheduled(self, round_number: int) -> int:
+		"""Who a round-robin schedule pairs us with this round. Anyone can work
+		it out from N and their own index, and over N-1 rounds it pairs every
+		two people exactly once, so nobody spends a round waiting."""
+		last = self.people - 1
+		turn = (round_number - 1) % last
+		if self.index == last:
+			return turn
+		partner = (2 * turn - self.index) % last
+		return last if partner == self.index else partner
+
 	def _retarget(self) -> None:
 		target = self._assign()
 		if target != self.target:
 			self.target, self.waited = target, 0
+		elif target is not None and self.commit_after is not None and self.exploring:
+			# Before the shared commit round nobody is expected to respond.
+			self.waited = 0
 		elif target is not None:
 			self.waited += 1
 			if self.waited > PATIENCE:
