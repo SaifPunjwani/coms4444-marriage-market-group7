@@ -42,7 +42,9 @@ the engine stops spending our dates on them.
 
 While a small market is still meeting we take nobody early, in the matching or
 not: every early marriage removes a partner the matching could have placed.
-The exception is a market where half the people have already married.
+Once half the people have married there is too little left to plan with, so
+we stop exploring and commit at once. The number of singles is public, so
+everyone who plays this way still switches on the same round.
 
 We never propose unless our own happiness would be positive. A partner whose
 projected profile changes between dates or contradicts their ad is treated as
@@ -419,7 +421,9 @@ class Player7(BasePlayer):
 		met = len(self.shown)
 		exploring = met < SCOUT or 4 * sum(self._kin(who) for who in self.shown) >= met
 		if self.commit_after is not None:
-			exploring = exploring and turn.round <= self.commit_after
+			# Small enough to meet everyone: explore until the shared commit
+			# round, or until half the market has married.
+			exploring = exploring and turn.round <= self.commit_after and not self.hasty
 		else:
 			# Too many people to meet them all from the start: keep meeting new
 			# ones only once there is time to meet everyone who is left.
