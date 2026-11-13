@@ -33,11 +33,12 @@ the engine stops spending our dates on them.
    out, propose to any compatible person, best first.
 
 We never propose unless our own happiness would be positive. A partner whose
-projected profile changes between dates or contradicts their ad is treated as
-no better than a random person and is left out of the shared graph. A partner
-whose stated ideal is just our own profile, and not what their own ad asked
-for, is flattering us: we assume an average ideal for them and that the value
-our ad asked for was nudged by 2.
+projected profile or stated ideal changes between dates is treated as no
+better than a random person and is left out of the shared graph. An ad that
+disagrees with what a date shows is not held against them: random players
+post noise and still behave honestly. A partner whose stated ideal is just our
+own profile, and not what their own ad asked for, is flattering us: we assume
+an average ideal for them and that the value our ad asked for was nudged by 2.
 """
 
 import math
@@ -167,19 +168,19 @@ class Player7(BasePlayer):
 		return self.bonus - ours - their / 2
 
 	def _trusted(self, who: int) -> bool:
-		"""Honest people show the same profile every time, matching their ad."""
+		"""Honest people show the same profile and state the same ideal every
+		time, and are not flattering us."""
 		if self._mirror(who):
 			return False
 		stated = self.stated[who]
 		return self._consistent(who) and all(s == stated[0] for s in stated)
 
 	def _consistent(self, who: int) -> bool:
-		"""They show the same profile every time, matching their ad."""
+		"""They show the same profile on every date. An ad that disagrees with
+		that profile is not held against them: an ad need not be true, and the
+		people whose ads are noise are often honest on their dates."""
 		shown = self.shown[who]
-		if any(p != shown[0] for p in shown):
-			return False
-		ad = self.ads.get(who)
-		return ad is None or shown[0][ad.own_dim] == ad.own_value
+		return all(p == shown[0] for p in shown)
 
 	def _mirror(self, who: int) -> bool:
 		"""Their stated ideal is (almost) exactly our own profile and is not
