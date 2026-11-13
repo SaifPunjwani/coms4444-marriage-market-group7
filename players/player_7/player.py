@@ -148,6 +148,10 @@ class Player7(BasePlayer):
 		self.waited = 0
 		self.round = 0
 		self.unmet = 0
+		# Who each person we know could marry among the others we know, with the
+		# pair's total happiness. A pair's answer never changes, so each one is
+		# worked out once, when the second of the two joins the shared graph.
+		self.near: dict[int, dict[int, float]] = {}
 
 	# ------------------------------------------------------------------
 	# Scoring
@@ -298,13 +302,19 @@ class Player7(BasePlayer):
 				edges[me].add(p)
 				edges[p].add(me)
 				weight[(min(me, p), max(me, p))] = ours + their
-		for i, a in enumerate(people):
-			for b in people[i + 1 :]:
-				total = self._pair(a, b)
-				if total is not None:
+		for p in people:
+			if p not in self.near:
+				self.near[p] = {}
+				for q in self.near:
+					total = self._pair(min(p, q), max(p, q)) if q != p else None
+					if total is not None:
+						self.near[p][q] = self.near[q][p] = total
+		for a in people:
+			for b, total in self.near[a].items():
+				if a < b and b in edges:
 					edges[a].add(b)
 					edges[b].add(a)
-					weight[(min(a, b), max(a, b))] = total
+					weight[(a, b)] = total
 
 		# Repeatedly match the person with the fewest compatible partners to
 		# their neighbour with the fewest, breaking ties by total happiness.
