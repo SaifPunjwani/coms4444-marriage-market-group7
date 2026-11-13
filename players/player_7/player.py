@@ -35,8 +35,9 @@ the engine stops spending our dates on them.
 We never propose unless our own happiness would be positive. A partner whose
 projected profile changes between dates or contradicts their ad is treated as
 no better than a random person and is left out of the shared graph. A partner
-whose stated ideal is just our own profile is flattering us: we assume an
-average ideal for them and that the value our ad asked for was nudged by 2.
+whose stated ideal is just our own profile, and not what their own ad asked
+for, is flattering us: we assume an average ideal for them and that the value
+our ad asked for was nudged by 2.
 """
 
 import math
@@ -82,7 +83,8 @@ SCOUT = 8
 # The chance that any one person we have yet to meet turns into a real option
 # for us, when deciding how picky to be with outsiders.
 CHANCE = 0.2
-# A stated ideal within this distance of our own profile is flattery.
+# A stated ideal within this distance of our own profile is flattery, unless
+# it agrees with what their own ad asked for.
 MIRROR = 1
 # How far a flatterer may have nudged the value our ad asked for.
 NUDGE = 2
@@ -180,9 +182,15 @@ class Player7(BasePlayer):
 		return ad is None or shown[0][ad.own_dim] == ad.own_value
 
 	def _mirror(self, who: int) -> bool:
-		"""Their stated ideal is (almost) exactly our own profile: flattery
-		rather than a real ideal, which an honest person almost never has."""
+		"""Their stated ideal is (almost) exactly our own profile and is not
+		what their own ad asked for: flattery rather than a real ideal. Ads are
+		posted before anyone meets, so an ideal that agrees with the ad is real
+		however well we fit it. At a low bonus those near-perfect fits are the
+		only people we can marry."""
 		stated = self.stated[who][-1]
+		ad = self.ads.get(who)
+		if ad is not None and stated[ad.seek_dim] == ad.seek_value:
+			return False
 		return sum(abs(a - b) for a, b in zip(stated, self.profile, strict=True)) <= MIRROR
 
 	def _with_me(self, who: int) -> tuple[float, float]:
